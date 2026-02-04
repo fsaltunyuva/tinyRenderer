@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_executable(app
     src/main.cpp
+    src/tgaimage.cpp
 )
 
 target_include_directories(app PRIVATE include)
