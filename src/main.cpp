@@ -158,10 +158,12 @@ void line(int ax, int ay, int bx, int by, TGAImage &framebuffer, TGAColor color)
         std::swap(ax, ay);
         std::swap(bx, by);
     }
+
     if (ax>bx) { // make it left−to−right
         std::swap(ax, bx);
         std::swap(ay, by);
     }
+    
     int y = ay;
     int ierror = 0;
     for (int x=ax; x<=bx; x++) {
