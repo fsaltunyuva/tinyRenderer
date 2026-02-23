@@ -8,65 +8,169 @@
 
 using namespace std;
 
-struct vec3{
-  float x, y, z;
+struct vec3
+{
+    float x, y, z;
 };
 
-struct ivec3{
-  int x, y, z;
+struct ivec3
+{
+    int x, y, z;
 };
 
 // constexpr does computation at compile time rather than run time
-constexpr TGAColor white   = {255, 255, 255, 255}; // attention, BGRA order
-constexpr TGAColor green   = {  0, 255,   0, 255};
-constexpr TGAColor red     = {  0,   0, 255, 255};
-constexpr TGAColor blue    = {255, 128,  64, 255};
-constexpr TGAColor yellow  = {  0, 200, 255, 255};
+constexpr TGAColor white = {255, 255, 255, 255}; // attention, BGRA order
+constexpr TGAColor green = {0, 255, 0, 255};
+constexpr TGAColor red = {0, 0, 255, 255};
+constexpr TGAColor blue = {255, 128, 64, 255};
+constexpr TGAColor yellow = {0, 200, 255, 255};
 
-
-void line(int ax, int ay, int bx, int by, TGAImage &framebuffer, TGAColor color) {
-    bool steep = std::abs(ax-bx) < std::abs(ay-by);
-    if (steep) { // if the line is steep, we transpose the image
+void line(int ax, int ay, int bx, int by, TGAImage &framebuffer, TGAColor color)
+{
+    bool steep = std::abs(ax - bx) < std::abs(ay - by);
+    if (steep)
+    { // if the line is steep, we transpose the image
         std::swap(ax, ay);
         std::swap(bx, by);
     }
 
-    if (ax>bx) { // make it left−to−right
+    if (ax > bx)
+    { // make it left−to−right
         std::swap(ax, bx);
         std::swap(ay, by);
     }
 
     int y = ay;
     int ierror = 0;
-    for (int x=ax; x<=bx; x++) {
+    for (int x = ax; x <= bx; x++)
+    {
         if (steep) // if transposed, de−transpose
             framebuffer.set(y, x, color);
         else
             framebuffer.set(x, y, color);
-        ierror += 2 * std::abs(by-ay);
+        ierror += 2 * std::abs(by - ay);
         y += (by > ay ? 1 : -1) * (ierror > bx - ax);
-        ierror -= 2 * (bx-ax)   * (ierror > bx - ax);
+        ierror -= 2 * (bx - ax) * (ierror > bx - ax);
     }
 }
 
-pair<int,int> project(const vec3& v, int width, int height) {
-    int x = static_cast<int>((v.x + 1.f) * width  * 0.5f);
-    int y = static_cast<int>((v.y + 1.f) * height * 0.5f);
+pair<int, int> project(const vec3 &v, int width, int height)
+{
+    int x = (int)((v.x + 1.f) * width * 0.5f);
+    int y = (int)((v.y + 1.f) * height * 0.5f);
     return {x, y};
 }
 
-void readObjFile(string fileName, vector<vec3> &vertices, vector<ivec3> &faces);
+static vector<string> split(const string &s, char delim)
+{
+    vector<string> elems;
+    stringstream ss(s);
+    string item;
+    while (getline(ss, item, delim))
+    {
+        if (!item.empty())
+            elems.push_back(item);
+    }
+    return elems;
+}
 
-int main(int argc, char** argv) {
-    constexpr int width  = 800;
+void readObjFile(const string &fileName, vector<vec3> &vertices, vector<ivec3> &faces)
+{
+    ifstream in(fileName);
+    if (!in.is_open())
+    {
+        cerr << "[ERR] Cannot open OBJ: " << fileName << "\n";
+        return;
+    }
+    cerr << "[OK] Opened OBJ: " << fileName << "\n";
+
+    if (!in)
+    {
+        cerr << "Cannot open: " << fileName << "\n";
+        return;
+    }
+
+    string line;
+    while (getline(in, line))
+    {
+        if (line.size() < 2)
+            continue;
+
+        // vertex line: "v x y z"
+        if (line.rfind("v ", 0) == 0)
+        {
+            auto parts = split(line, ' ');
+            if (parts.size() >= 4)
+            {
+                vertices.push_back({stof(parts[1]), stof(parts[2]), stof(parts[3])});
+            }
+        }
+        // face line: "f a/b/c d/b/c e/b/c" OR "f a d e"
+        else if (line.rfind("f ", 0) == 0)
+        {
+            auto parts = split(line, ' ');
+            if (parts.size() >= 4)
+            {
+                auto p1 = split(parts[1], '/');
+                auto p2 = split(parts[2], '/');
+                auto p3 = split(parts[3], '/');
+
+                ivec3 f{};
+                f.x = stoi(p1[0]);
+                f.y = stoi(p2[0]);
+                f.z = stoi(p3[0]);
+                faces.push_back(f);
+            }
+        }
+    }
+}
+
+void normalizeToMinusOneOne(vector<vec3> &vertices)
+{
+    if (vertices.empty())
+        return;
+
+    vec3 mn = vertices[0], mx = vertices[0];
+    for (auto &v : vertices)
+    {
+        mn.x = min(mn.x, v.x);
+        mn.y = min(mn.y, v.y);
+        mn.z = min(mn.z, v.z);
+        mx.x = max(mx.x, v.x);
+        mx.y = max(mx.y, v.y);
+        mx.z = max(mx.z, v.z);
+    }
+
+    vec3 center{(mn.x + mx.x) * 0.5f, (mn.y + mx.y) * 0.5f, (mn.z + mx.z) * 0.5f};
+    float sx = mx.x - mn.x, sy = mx.y - mn.y, sz = mx.z - mn.z;
+    float s = max(sx, max(sy, sz));
+    if (s == 0)
+        s = 1;
+
+    // map to approximately [-1,1]
+    for (auto &v : vertices)
+    {
+        v.x = (v.x - center.x) * 2.f / s;
+        v.y = (v.y - center.y) * 2.f / s;
+        v.z = (v.z - center.z) * 2.f / s;
+    }
+}
+
+int main()
+{
+    constexpr int width = 800;
     constexpr int height = 800;
     TGAImage framebuffer(width, height, TGAImage::RGB);
 
     vector<vec3> vertices;
     vector<ivec3> faces;
-    readObjFile("../models/diablo3_pose.obj", vertices, faces);
 
-    for (int i = 0; i < faces.size(); i++) {
+    readObjFile("../../models/diablo3_pose.obj", vertices, faces);
+
+    normalizeToMinusOneOne(vertices);
+
+    for (int i = 0; i < (int)faces.size(); i++)
+    {
         vec3 v0 = vertices[faces[i].x - 1];
         vec3 v1 = vertices[faces[i].y - 1];
         vec3 v2 = vertices[faces[i].z - 1];
@@ -81,58 +185,5 @@ int main(int argc, char** argv) {
     }
 
     framebuffer.write_tga_file("framebuffer.tga");
-
     return 0;
-}
-
-void split(const std::string &s, char delim, std::vector<std::string> &elems) {
-    std::stringstream ss(s);
-    std::string item;
-    while (getline(ss, item, delim)) {
-        elems.push_back(item);
-    }
-}
-
-vector<string> split(const string &s, char delim) {
-    vector<string> elems;
-    split(s, delim, elems);
-    return elems;
-}
-
-void readObjFile(string fileName, vector<vec3> &vertices, vector<ivec3> &faces){
-    ifstream ReadObjFile(fileName);
-    string input;
-
-    while (getline(ReadObjFile, input)) {
-        if (input[0] == 'v'){
-            vector<string> strings;
-            strings = split(input, ' ');
-            if (strings[0] == "v"){
-                vec3 tempvec3;
-                tempvec3.x = stof(strings[1]);
-                tempvec3.y = stof(strings[2]);
-                tempvec3.z = stof(strings[3]);
-                vertices.push_back(tempvec3);
-            }
-        }
-
-        if (input[0] == 'f'){
-            vector<string> strings;
-            strings = split(input, ' ');
-            ivec3 tempvec3;
-
-            for (int i = 1; i < 4; i++){
-                vector<string> values;
-                values = split(strings[i], '/');
-
-                if (i == 0) tempvec3.x = stoi(values[0]);
-                if (i == 1) tempvec3.y = stoi(values[0]);
-                if (i == 2) tempvec3.z = stoi(values[0]);
-            }
-
-            faces.push_back(tempvec3);
-        }
-    }
-
-    ReadObjFile.close();
 }
