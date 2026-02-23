@@ -125,37 +125,6 @@ void readObjFile(const string &fileName, vector<vec3> &vertices, vector<ivec3> &
     }
 }
 
-void normalizeToMinusOneOne(vector<vec3> &vertices)
-{
-    if (vertices.empty())
-        return;
-
-    vec3 mn = vertices[0], mx = vertices[0];
-    for (auto &v : vertices)
-    {
-        mn.x = min(mn.x, v.x);
-        mn.y = min(mn.y, v.y);
-        mn.z = min(mn.z, v.z);
-        mx.x = max(mx.x, v.x);
-        mx.y = max(mx.y, v.y);
-        mx.z = max(mx.z, v.z);
-    }
-
-    vec3 center{(mn.x + mx.x) * 0.5f, (mn.y + mx.y) * 0.5f, (mn.z + mx.z) * 0.5f};
-    float sx = mx.x - mn.x, sy = mx.y - mn.y, sz = mx.z - mn.z;
-    float s = max(sx, max(sy, sz));
-    if (s == 0)
-        s = 1;
-
-    // map to approximately [-1,1]
-    for (auto &v : vertices)
-    {
-        v.x = (v.x - center.x) * 2.f / s;
-        v.y = (v.y - center.y) * 2.f / s;
-        v.z = (v.z - center.z) * 2.f / s;
-    }
-}
-
 int main()
 {
     constexpr int width = 800;
@@ -166,8 +135,6 @@ int main()
     vector<ivec3> faces;
 
     readObjFile("../../models/diablo3_pose.obj", vertices, faces);
-
-    normalizeToMinusOneOne(vertices);
 
     for (int i = 0; i < (int)faces.size(); i++)
     {
