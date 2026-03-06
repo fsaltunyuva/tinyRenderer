@@ -51,17 +51,15 @@ double signed_triangle_area(int ax, int ay, int bx, int by, int cx, int cy)
 
 void triangle(int ax, int ay, int bx, int by, int cx, int cy, TGAImage &framebuffer, TGAColor color)
 {
-    line(ax, ay, bx, by, framebuffer, color);
-    line(bx, by, cx, cy, framebuffer, color);
-    line(cx, cy, ax, ay, framebuffer, color);
 
-#pragma region Modern Rasterization
     int bbminx = std::min(std::min(ax, bx), cx); // bounding box for the triangle
     int bbminy = std::min(std::min(ay, by), cy); // defined by its top left and bottom right corners
     int bbmaxx = std::max(std::max(ax, bx), cx);
     int bbmaxy = std::max(std::max(ay, by), cy);
 
     double total_area = signed_triangle_area(ax, ay, bx, by, cx, cy);
+    //if (total_area < 1) return; // backface culling + discarding triangles that cover less than a pixel 
+
 #pragma omp parallel for
     for (int x = bbminx; x <= bbmaxx; x++){
         for (int y = bbminy; y <= bbmaxy; y++){
@@ -75,49 +73,6 @@ void triangle(int ax, int ay, int bx, int by, int cx, int cy, TGAImage &framebuf
             framebuffer.set(x, y, color);
         }
     }
-
-#pragma endregion
-
-#pragma region Scanline Rasterization
-    // make it ay <= by <= cy
-    if (ay > by)
-    {
-        swap(ax, bx);
-        swap(ay, by);
-    }
-    if (ay > cy)
-    {
-        swap(ax, cx);
-        swap(ay, cy);
-    }
-    if (by > cy)
-    {
-        swap(bx, cx);
-        swap(by, cy);
-    }
-
-    // use green triangle as example bc. it satisfies ay <= by <= cy directly
-    for (int y = ay; y <= cy; y++)
-    {
-        float t1 = (float)(y - ay) / (cy - ay);
-        int rightx = ax + t1 * (cx - ax);
-
-        float t2;
-        int leftx;
-
-        if (y < by) // bottom half
-        {
-            t2 = (float)(y - ay) / (by - ay);
-            leftx = ax + t2 * (bx - ax);
-        }
-        else{ // upper half
-            t2 = (float)(y - by) / (cy - by);
-            leftx = bx + t2 * (cx - bx);
-        }
-
-        line(leftx, y, rightx, y, framebuffer, color);
-    }
-#pragma endregion
 }
 
 int main(int argc, char** argv) {
