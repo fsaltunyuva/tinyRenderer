@@ -26,13 +26,14 @@ void line(int ax, int ay, int bx, int by, TGAImage &framebuffer, TGAColor color)
 
     int y = ay;
     int ierror = 0;
-    
+
     for (int x = ax; x <= bx; x++)
     {
         if (steep) // if transposed, de−transpose
             framebuffer.set(y, x, color);
         else
             framebuffer.set(x, y, color);
+
         ierror += 2 * std::abs(by - ay);
         if (ierror > bx - ax)
         {
@@ -47,6 +48,45 @@ void triangle(int ax, int ay, int bx, int by, int cx, int cy, TGAImage &framebuf
     line(ax, ay, bx, by, framebuffer, color);
     line(bx, by, cx, cy, framebuffer, color);
     line(cx, cy, ax, ay, framebuffer, color);
+
+    // make it ay <= by <= cy
+    if (ay > by)
+    {
+        swap(ax, bx);
+        swap(ay, by);
+    }
+    if (ay > cy)
+    {
+        swap(ax, cx);
+        swap(ay, cy);
+    }
+    if (by > cy)
+    {
+        swap(bx, cx);
+        swap(by, cy);
+    }
+
+    // use green triangle as example bc. it satisfies ay <= by <= cy directly
+    for (int y = ay; y <= cy; y++)
+    {
+        float t1 = (float)(y - ay) / (cy - ay);
+        int rightx = ax + t1 * (cx - ax);
+
+        float t2;
+        int leftx;
+
+        if (y < by) // bottom half
+        {
+            t2 = (float)(y - ay) / (by - ay);
+            leftx = ax + t2 * (bx - ax);
+        }
+        else{ // upper half
+            t2 = (float)(y - by) / (cy - by);
+            leftx = bx + t2 * (cx - bx);
+        }
+
+        line(leftx, y, rightx, y, framebuffer, color);
+    }
 }
 
 int main(int argc, char** argv) {
