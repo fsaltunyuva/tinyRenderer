@@ -7,6 +7,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_executable(app
     src/main.cpp
     src/tgaimage.cpp
+        include/furmatrix.h
+        include/Furvec3.h
 )
 
 target_include_directories(app PRIVATE include)
