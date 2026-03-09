@@ -28,4 +28,13 @@ public:
         result.z = this->x * other.data[2][0] + this->y * other.data[2][1] + this->z * other.data[2][2];
         return result;
     }
+
+    Furvec3 operator/(float other)
+    {
+        Furvec3 result;
+        result.x = this->x / other;
+        result.y = this->y / other;
+        result.z = this->z / other;
+        return result;
+    }
 };

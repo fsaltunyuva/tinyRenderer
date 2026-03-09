@@ -147,6 +147,12 @@ Furvec3 rot(Furvec3 v) {
     return v*Ry;
 }
 
+Furvec3 perspective(Furvec3 v)
+{
+    constexpr double c = 3.;
+    return v / (1 - v.z/c);
+}
+
 // 2d cross product / 2
 double signed_triangle_area(int ax, int ay, int bx, int by, int cx, int cy)
 {
@@ -202,9 +208,9 @@ int main()
         Furvec3 v1 = vertices[faces[i].y - 1];
         Furvec3 v2 = vertices[faces[i].z - 1];
 
-        auto [x0, y0, z0] = project(rot(v0), width, height);
-        auto [x1, y1, z1] = project(rot(v1), width, height);
-        auto [x2, y2, z2] = project(rot(v2), width, height);
+        auto [x0, y0, z0] = project(perspective(rot(v0)), width, height);
+        auto [x1, y1, z1] = project(perspective(rot(v1)), width, height);
+        auto [x2, y2, z2] = project(perspective(rot(v2)), width, height);
 
         TGAColor randomColor = {(uint8_t)(rand() % 255), (uint8_t)(rand() % 255), (uint8_t)(rand() % 255), 255};
         triangle(x0, y0, z0, x1, y1, z1, x2, y2, z2, depthbuffer, framebuffer, randomColor);
