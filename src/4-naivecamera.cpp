@@ -52,13 +52,13 @@ void line(int ax, int ay, int bx, int by, TGAImage &framebuffer, TGAColor color)
     }
 }
 
-tuple<int, int, int> project(const Furvec3 &v, int width, int height)
+tuple<int, int> project(const Furvec3 &v, int width, int height)
 {
     int x = (int)((v.x + 1.f) * width * 0.5f);
     int y = (int)((v.y + 1.f) * height * 0.5f);
-    int z = (int)((v.z + 1.f) * 255./2); // 0-255 (0 for far, 255 for near, buffer initialized as 0s)
+    //int z = (int)((v.z + 1.f) * 255./2); // 0-255 (0 for far, 255 for near, buffer initialized as 0s)
 
-    return {x, y, z};
+    return {x, y};
 }
 
 static vector<string> split(const string &s, char delim)
@@ -159,7 +159,7 @@ double signed_triangle_area(int ax, int ay, int bx, int by, int cx, int cy)
     return .5 * ((by - ay) * (bx + ax) + (cy - by) * (cx + bx) + (ay - cy) * (ax + cx));
 }
 
-void triangle(int ax, int ay, int az, int bx, int by, int bz, int cx, int cy, int cz, TGAImage &depthBuffer, TGAImage &framebuffer, TGAColor color)
+void triangle(int ax, int ay, float az, int bx, int by, float bz, int cx, int cy, float cz, vector<vector<float>> &depthBuffer, TGAImage &framebuffer, TGAColor color)
 {
     int bbminx = std::min(std::min(ax, bx), cx); // bounding box for the triangle
     int bbminy = std::min(std::min(ay, by), cy); // defined by its top left and bottom right corners
@@ -181,9 +181,9 @@ void triangle(int ax, int ay, int az, int bx, int by, int bz, int cx, int cy, in
 
             // outside the triangle
             if (alpha < 0 || beta < 0 || gamma < 0) continue;
-            unsigned char z = static_cast<unsigned char>(alpha * az + beta * bz + gamma * cz);
-            if (z <= depthBuffer.get(x, y)[0]) continue;
-            depthBuffer.set(x, y, {z});
+            float z = alpha * az + beta * bz + gamma * cz;
+            if (z <= depthBuffer[x][y]) continue;
+            depthBuffer[x][y] = z;
             framebuffer.set(x, y, color);
         }
     }
@@ -195,7 +195,8 @@ int main()
     constexpr int width = 800;
     constexpr int height = 800;
     TGAImage framebuffer(width, height, TGAImage::RGB);
-    TGAImage depthbuffer(width, height, TGAImage::GRAYSCALE);
+    // TGAImage depthbuffer(width, height, TGAImage::GRAYSCALE);
+    vector<vector<float>> depthbuffer(width, vector<float>(height, -numeric_limits<float>::max()));
 
     vector<Furvec3> vertices;
     vector<ivec3> faces;
@@ -204,19 +205,32 @@ int main()
 
     for (int i = 0; i < (int)faces.size(); i++)
     {
-        Furvec3 v0 = vertices[faces[i].x - 1];
-        Furvec3 v1 = vertices[faces[i].y - 1];
-        Furvec3 v2 = vertices[faces[i].z - 1];
+        Furvec3 pv0 = perspective(rot(vertices[faces[i].x - 1]));
+        Furvec3 pv1 = perspective(rot(vertices[faces[i].y - 1]));
+        Furvec3 pv2 = perspective(rot(vertices[faces[i].z - 1]));
 
-        auto [x0, y0, z0] = project(perspective(rot(v0)), width, height);
-        auto [x1, y1, z1] = project(perspective(rot(v1)), width, height);
-        auto [x2, y2, z2] = project(perspective(rot(v2)), width, height);
+        auto [x0, y0] = project(pv0, width, height);
+        auto [x1, y1] = project(pv1, width, height);
+        auto [x2, y2] = project(pv2, width, height);
+
+        float z0 = pv0.z;
+        float z1 = pv1.z;
+        float z2 = pv2.z;
 
         TGAColor randomColor = {(uint8_t)(rand() % 255), (uint8_t)(rand() % 255), (uint8_t)(rand() % 255), 255};
         triangle(x0, y0, z0, x1, y1, z1, x2, y2, z2, depthbuffer, framebuffer, randomColor);
     }
 
     framebuffer.write_tga_file("framebuffer.tga");
-    depthbuffer.write_tga_file("depthbuffer.tga");
+
+    // Depth buffer
+    TGAImage depthImg(width, height, TGAImage::GRAYSCALE);
+    for (int x = 0; x < width; x++)
+        for (int y = 0; y < height; y++) {
+            float normalized = (depthbuffer[x][y] + 1.f) * 0.5f * 255.f;
+            unsigned char val = (unsigned char)max(0.f, min(255.f, normalized));
+            depthImg.set(x, y, {val});
+        }
+    depthImg.write_tga_file("depthbuffer.tga");
     return 0;
 }
