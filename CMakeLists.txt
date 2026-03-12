@@ -9,6 +9,9 @@ add_executable(app
     src/tgaimage.cpp
         include/furmatrix.h
         include/Furvec3.h
+        include/furgl.h
+        src/furgl.cpp
+        include/furmodel.h
 )
 
 target_include_directories(app PRIVATE include)
