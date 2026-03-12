@@ -49,6 +49,16 @@ public:
         std::cout << "[OK] OBJ Loaded: " << verts.size() << " vertices, " << faces.size() << " faces." << std::endl;
     }
 
+    Furvec3 normal(int iface, int nthvert) const {
+        int i0 = faces[iface][0];
+        int i1 = faces[iface][1];
+        int i2 = faces[iface][2];
+        Furvec3 a = verts[i0];
+        Furvec3 b = verts[i1];
+        Furvec3 c = verts[i2];
+        return normalized(cross(c - a, b - a));
+    }
+
     int nverts() const { return (int) verts.size(); }
     int nfaces() const { return (int) faces.size(); }
     Furvec3 vert(int i) const { return verts[i]; }

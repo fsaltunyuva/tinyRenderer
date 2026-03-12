@@ -29,6 +29,40 @@ struct RandomShader : public IShader {
     }
 };
 
+struct PhongShader : public IShader {
+    const Furmodel &model;
+    Furvec3 varying_nrm[3];
+    Furvec3 light_dir = normalized(Furvec3(1, 5, 1));
+
+    PhongShader(const Furmodel &m) : model(m) {}
+
+    Furvec4 vertex(int iface, int nthvert) override {
+        int v_idx = model.face(iface)[nthvert];
+        varying_nrm[nthvert] = model.normal(iface, nthvert);
+
+        Furvec3 v = model.vert(v_idx);
+        Furvec3 eye_coords = multiply_with_w(ModelView, v);
+        float w = eye_coords.z * Perspective.data[3][2] + Perspective.data[3][3];
+
+        Furvec3 p = multiply_with_w(Perspective, eye_coords);
+        return {p.x, p.y, p.z, w};
+    }
+
+    std::pair<bool, TGAColor> fragment(Furvec3 bar) override {
+        Furvec3 bn = normalized(varying_nrm[0]*bar.x + varying_nrm[1]*bar.y + varying_nrm[2]*bar.z);
+        float diffuse = std::max(0.f, bn * light_dir);
+        Furvec3 r = normalized(bn * (bn * light_dir) * 2.f - light_dir);
+        float specular = std::pow(std::max(0.f, r.z), 32);
+
+        TGAColor color{255, 255, 255, 255};
+        for (int i=0; i<3; i++) {
+            float intensity = 0.1f + 0.6f * diffuse + 0.7f * specular;
+            color.bgra[i] = (uint8_t)std::min(255.f, 255.f * intensity);
+        }
+        return {false, color};
+    }
+};
+
 int main(int argc, char **argv) {
     const int width = 800;
     const int height = 800;
@@ -45,7 +79,7 @@ int main(int argc, char **argv) {
     TGAImage framebuffer(width, height, TGAImage::RGB);
 
     Furmodel model("models/diablo3_pose.obj");
-    RandomShader shader(model);
+    PhongShader shader(model);
 
     for (int i = 0; i < model.nfaces(); i++) {
         Triangle screen_coords;
@@ -61,9 +95,9 @@ int main(int argc, char **argv) {
             else clip_z.z = clip_vert.z;
         }
 
-        shader.color = TGAColor{
-            (uint8_t) (std::rand() % 255), (uint8_t) (std::rand() % 255), (uint8_t) (std::rand() % 255), 255
-        };
+        // shader.color = TGAColor{
+        //     (uint8_t) (std::rand() % 255), (uint8_t) (std::rand() % 255), (uint8_t) (std::rand() % 255), 255
+        // };
         rasterize(screen_coords, &clip_z, shader, framebuffer);
     }
 

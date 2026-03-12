@@ -6,42 +6,36 @@ class Furvec3
 {
 public:
     float x, y, z;
-    Furvec3()
-    {
-        this->x = 0;
-        this->y = 0;
-        this->z = 0;
-    }
+    Furvec3() : x(0), y(0), z(0) {}
 
-    Furvec3(float x, float y, float z)
-    {
-        this->x = x;
-        this->y = y;
-        this->z = z;
-    }
+    Furvec3(float x, float y, float z) : x(x), y(y), z(z) {}
 
-    Furvec3 operator-(const Furvec3& other) const
-    {
+    Furvec3 operator-(const Furvec3& other) const {
         return Furvec3(this->x - other.x, this->y - other.y, this->z - other.z);
     }
 
-    Furvec3 operator*(Furmatrix other)
-    {
+    Furvec3 operator+(const Furvec3& other) const {
+        return Furvec3(this->x + other.x, this->y + other.y, this->z + other.z);
+    }
+
+    Furvec3 operator*(float f) const {
+        return Furvec3(x * f, y * f, z * f);
+    }
+
+    float operator*(const Furvec3& other) const {
+        return x * other.x + y * other.y + z * other.z;
+    }
+
+    Furvec3 operator*(Furmatrix other) {
         Furvec3 result;
-        // hardcoded for 3x3 * 3x1
         result.x = this->x * other.data[0][0] + this->y * other.data[0][1] + this->z * other.data[0][2];
         result.y = this->x * other.data[1][0] + this->y * other.data[1][1] + this->z * other.data[1][2];
         result.z = this->x * other.data[2][0] + this->y * other.data[2][1] + this->z * other.data[2][2];
         return result;
     }
 
-    Furvec3 operator/(float other) const
-    {
-        Furvec3 result;
-        result.x = this->x / other;
-        result.y = this->y / other;
-        result.z = this->z / other;
-        return result;
+    Furvec3 operator/(float other) const {
+        return Furvec3(x / other, y / other, z / other);
     }
 
     float norm() const {
