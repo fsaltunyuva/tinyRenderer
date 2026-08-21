@@ -1,3 +1,4 @@
+#include <complex>
 #include <iostream>
 #include <vector>
 #include <cstdlib>
@@ -31,14 +32,18 @@ struct RandomShader : public IShader {
 
 struct PhongShader : public IShader {
     const Furmodel &model;
+    const TGAImage &normal_map;
+
     Furvec3 varying_nrm[3];
     Furvec3 light_dir = normalized(Furvec3(1, 5, 1));
+    Furvec3 varying_uv[3];
 
-    PhongShader(const Furmodel &m) : model(m) {}
+    PhongShader(const Furmodel &m, const TGAImage &nm) : model(m), normal_map(nm) {}
 
     Furvec4 vertex(int iface, int nthvert) override {
         int v_idx = model.face(iface)[nthvert];
         varying_nrm[nthvert] = model.normal(iface, nthvert);
+        varying_uv[nthvert] = model.uv(iface, nthvert); // fetch from model for nthvert vertex and iface face
 
         Furvec3 v = model.vert(v_idx);
         Furvec3 eye_coords = multiply_with_w(ModelView, v);
@@ -49,8 +54,23 @@ struct PhongShader : public IShader {
     }
 
     std::pair<bool, TGAColor> fragment(Furvec3 bar) override {
+        Furvec3 uv = varying_uv[0] * bar.x + varying_uv[1] * bar.y + varying_uv[2] * bar.z; // interpolation with barycentric weights
+
+        int tex_x = std::min(normal_map.width() - 1, std::max(0, (int)(uv.x * normal_map.width())));
+        int tex_y = std::min(normal_map.height() - 1, std::max(0, (int)(uv.y * normal_map.height())));
+
+        TGAColor c = normal_map.get(tex_x, tex_y);
+
+        Furvec3 n(
+            c.bgra[2] / 255.f * 2.f - 1.f, // Red -> X
+            c.bgra[1] / 255.f * 2.f - 1.f, // Green -> Y
+            c.bgra[0] / 255.f * 2.f - 1.f  // Blue -> Z
+        );
+        n = normalized(n);
+
         Furvec3 bn = normalized(varying_nrm[0]*bar.x + varying_nrm[1]*bar.y + varying_nrm[2]*bar.z); // interpolating normals using barycentric weights
-        float diffuse = std::max(0.f, bn * light_dir);
+        // float diffuse = std::max(0.f, bn * light_dir);
+        float diffuse = std::max(0.f, n * light_dir);
         Furvec3 r = normalized(bn * (bn * light_dir) * 2.f - light_dir);
         float specular = std::pow(std::max(0.f, r.z), 32);
 
@@ -77,9 +97,12 @@ int main(int argc, char **argv) {
     init_zbuffer(width, height);
 
     TGAImage framebuffer(width, height, TGAImage::RGB);
+    TGAImage normal_map;
+    normal_map.read_tga_file("models/diablo3_pose_nm.tga");
+    normal_map.flip_vertically(); // Aligns the image Y-axis with texture V-coordinates
 
     Furmodel model("models/diablo3_pose.obj");
-    PhongShader shader(model);
+    PhongShader shader(model, normal_map);
 
     for (int i = 0; i < model.nfaces(); i++) {
         Triangle screen_coords;
