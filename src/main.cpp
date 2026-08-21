@@ -49,7 +49,7 @@ struct PhongShader : public IShader {
     }
 
     std::pair<bool, TGAColor> fragment(Furvec3 bar) override {
-        Furvec3 bn = normalized(varying_nrm[0]*bar.x + varying_nrm[1]*bar.y + varying_nrm[2]*bar.z);
+        Furvec3 bn = normalized(varying_nrm[0]*bar.x + varying_nrm[1]*bar.y + varying_nrm[2]*bar.z); // interpolating normals using barycentric weights
         float diffuse = std::max(0.f, bn * light_dir);
         Furvec3 r = normalized(bn * (bn * light_dir) * 2.f - light_dir);
         float specular = std::pow(std::max(0.f, r.z), 32);
