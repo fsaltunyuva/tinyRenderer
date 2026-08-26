@@ -33,17 +33,20 @@ struct RandomShader : public IShader {
 struct PhongShader : public IShader {
     const Furmodel &model;
     const TGAImage &normal_map;
+    const TGAImage &diffuse_map;
 
     Furvec3 varying_nrm[3];
     Furvec3 light_dir = normalized(Furvec3(1, 5, 1));
     Furvec3 varying_uv[3];
+    Furvec3 varying_diff[3];
 
-    PhongShader(const Furmodel &m, const TGAImage &nm) : model(m), normal_map(nm) {}
+    PhongShader(const Furmodel &m, const TGAImage &nm, const TGAImage &diff) : model(m), normal_map(nm), diffuse_map(diff) {}
 
     Furvec4 vertex(int iface, int nthvert) override {
         int v_idx = model.face(iface)[nthvert];
         varying_nrm[nthvert] = model.normal(iface, nthvert);
         varying_uv[nthvert] = model.uv(iface, nthvert); // fetch from model for nthvert vertex and iface face
+        varying_diff[nthvert] = model.uv(iface, nthvert); // fetch from model for nthvert vertex and iface face
 
         Furvec3 v = model.vert(v_idx);
         Furvec3 eye_coords = multiply_with_w(ModelView, v);
@@ -68,17 +71,26 @@ struct PhongShader : public IShader {
         );
         n = normalized(n);
 
+        Furvec3 diff = varying_diff[0] * bar.x + varying_diff[1] * bar.y + varying_diff[2] * bar.z; // interpolation with barycentric weights
+
+        int tex_x_diff = std::min(diffuse_map.width() - 1, std::max(0, (int)(diff.x * diffuse_map.width())));
+        int tex_y_diff = std::min(diffuse_map.height() - 1, std::max(0, (int)(diff.y * diffuse_map.height())));
+
+        TGAColor diffuse_color = diffuse_map.get(tex_x_diff, tex_y_diff);
+
         Furvec3 bn = normalized(varying_nrm[0]*bar.x + varying_nrm[1]*bar.y + varying_nrm[2]*bar.z); // interpolating normals using barycentric weights
         // float diffuse = std::max(0.f, bn * light_dir);
         float diffuse = std::max(0.f, n * light_dir);
         Furvec3 r = normalized(bn * (bn * light_dir) * 2.f - light_dir);
         float specular = std::pow(std::max(0.f, r.z), 32);
 
-        TGAColor color{255, 255, 255, 255};
+        TGAColor color{diffuse_color.bgra[0], diffuse_color.bgra[1], diffuse_color.bgra[2], 255};
+        /*
         for (int i=0; i<3; i++) {
             float intensity = 0.1f + 0.6f * diffuse + 0.7f * specular;
             color.bgra[i] = (uint8_t)std::min(255.f, 255.f * intensity);
         }
+        */
         return {false, color};
     }
 };
@@ -101,8 +113,12 @@ int main(int argc, char **argv) {
     normal_map.read_tga_file("models/diablo3_pose_nm.tga");
     normal_map.flip_vertically(); // Aligns the image Y-axis with texture V-coordinates
 
+    TGAImage diffuse_map;
+    diffuse_map.read_tga_file("models/diablo3_pose_diffuse.tga");
+    diffuse_map.flip_vertically(); // Aligns the image Y-axis with texture V-coordinates
+
     Furmodel model("models/diablo3_pose.obj");
-    PhongShader shader(model, normal_map);
+    PhongShader shader(model, normal_map, diffuse_map);
 
     for (int i = 0; i < model.nfaces(); i++) {
         Triangle screen_coords;
