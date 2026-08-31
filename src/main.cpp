@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <complex>
 #include <iostream>
 #include <vector>
@@ -7,12 +8,11 @@
 #include "Furmatrix.h"
 #include "Furmodel.h"
 
-struct RandomShader : public IShader {
+struct DepthShader : public IShader {
     const Furmodel &model;
     TGAColor color;
 
-    RandomShader(const Furmodel &m) : model(m) {
-    }
+    DepthShader(const Furmodel &m) : model(m) {}
 
     Furvec4 vertex(int iface, int nthvert) override {
         int v_idx = model.face(iface)[nthvert];
@@ -26,7 +26,7 @@ struct RandomShader : public IShader {
     }
 
     std::pair<bool, TGAColor> fragment(Furvec3 bar) override {
-        return {false, color};
+        return {false, color}; // no need for color
     }
 };
 
@@ -35,13 +35,20 @@ struct PhongShader : public IShader {
     const TGAImage &normal_map;
     const TGAImage &diffuse_map;
     const TGAImage &specular_map;
+    TGAImage &shadow_frame;
 
     Furvec3 varying_nrm[3];
     Furvec3 light_dir = normalized(Furvec3(1, 5, 1));
     Furvec3 varying_vert[3]; // 3D positions of a vertex
     Furvec3 varying_uv[3];
 
-    PhongShader(const Furmodel &m, const TGAImage &nm, const TGAImage &diff, const TGAImage &spec) : model(m), normal_map(nm), diffuse_map(diff), specular_map(spec) {}
+    // Shadow Mapping
+    const std::vector<float> &shadow_buffer;
+    const Furmatrix &light_matrix;
+    int width, height;
+
+    PhongShader(const Furmodel &m, const TGAImage &nm, const TGAImage &diff, const TGAImage &spec, const std::vector<float> &sb, const Furmatrix &lm, int w, int h, TGAImage &sf)
+                : model(m), normal_map(nm), diffuse_map(diff), specular_map(spec), shadow_buffer(sb), light_matrix(lm), width(w), height(h), shadow_frame(sf) {}
 
     Furvec4 vertex(int iface, int nthvert) override {
         int v_idx = model.face(iface)[nthvert];
@@ -110,6 +117,18 @@ struct PhongShader : public IShader {
         Furvec3 r = normalized(real_n * (real_n * light_dir) * 2.f - light_dir);
         float specular = std::pow(std::max(0.f, r.z), 32);
 
+        Furvec3 p_model = varying_vert[0] * bar.x + varying_vert[1] * bar.y + varying_vert[2] * bar.z; // current triangle's 3D position
+        Furvec3 p_light = multiply_with_w(light_matrix, p_model); // converting that position to light's perspective to check shadow, p_light.z gives depth from the light
+
+        int idx = int(p_light.x) + int(p_light.y) * width; // fetch depth data
+
+        float shadow = 1.0f; // 0 means it's in shadow
+        if (idx >= 0 && idx < (int)shadow_buffer.size()) {
+            if (shadow_buffer[idx] > p_light.z + 0.08f) { // occluded
+                shadow = 0.3f; // ambient light for the shadow
+            }
+        }
+
         // // With Diffuse and Specular maps
         // TGAColor color{
         //     static_cast<std::uint8_t>(std::min(255, diffuse_color.bgra[0] + specular_color.bgra[0])),
@@ -121,7 +140,7 @@ struct PhongShader : public IShader {
         // With shading
         TGAColor color;
         for (int i = 0; i < 3; i++) {
-            float channel = 10.f + diffuse_color.bgra[i] * diffuse + 0.6f * specular_color.bgra[i] * specular;
+            float channel = 10.f + (diffuse_color.bgra[i] * diffuse + 0.6f * specular_color.bgra[i] * specular) * shadow;
             color.bgra[i] = static_cast<std::uint8_t>(std::min(255.f, channel));
         }
 
@@ -130,6 +149,22 @@ struct PhongShader : public IShader {
         //     float intensity = 0.1f + 0.6f * (color.bgra[i] / 255.f) + 0.7f * specular;
         //     color.bgra[i] = static_cast<std::uint8_t>(std::min(255.f, 255.f * intensity));
         // }
+
+        // Shadow Mask Drawing
+        Furvec3 cam_coords = multiply_with_w(ModelView, p_model);
+        Furvec3 clip_coords = multiply_with_w(Perspective, cam_coords);
+        Furvec3 scr = multiply_with_w(ViewPort, clip_coords);
+
+        uint8_t mask_val = (shadow < 1.0f) ? 0 : 255;
+        TGAColor mask_color;
+        mask_color.bgra[0] = mask_val;
+        mask_color.bgra[1] = mask_val;
+        mask_color.bgra[2] = mask_val;
+        mask_color.bgra[3] = 255;
+
+        int sx = std::clamp((int)scr.x, 0, width - 1);
+        int sy = std::clamp((int)scr.y, 0, height - 1);
+        shadow_frame.set(sx, sy, mask_color);
 
         return {false, color};
     }
@@ -143,12 +178,49 @@ int main(int argc, char **argv) {
     Furvec3 center(0, 0, 0);
     Furvec3 up(0, 1, 0);
 
+    Furmodel model("models/diablo3_pose.obj");
+
+    // First Pass for Shadow Mapping (from light's perspective)
+    Furvec3 light_dir(1, 5, 1);
+    lookat(light_dir, center, up);
+    init_perspective((light_dir - center).norm());
+    init_viewport(width / 16, height / 16, width * 7 / 8, height * 7 / 8);
+    init_zbuffer(width, height);
+
+    Furmatrix LightMatrix = ViewPort * Perspective * ModelView; // projection matrix of light
+
+    DepthShader depth_shader(model);
+    TGAImage depth_dump(width, height, TGAImage::RGB); // filler for rasterize function
+
+    for (int i = 0; i < model.nfaces(); i++) {
+        Triangle screen_coords;
+        Furvec3 clip_z;
+
+        for (int j = 0; j < 3; j++) {
+            Furvec4 clip_vert = depth_shader.vertex(i, j);
+
+            screen_coords[j] = multiply_with_w(ViewPort, Furvec3(clip_vert.x, clip_vert.y, clip_vert.z));
+
+            if (j == 0) clip_z.x = clip_vert.z;
+            else if (j == 1) clip_z.y = clip_vert.z;
+            else clip_z.z = clip_vert.z;
+        }
+
+        rasterize(screen_coords, &clip_z, depth_shader, depth_dump);
+    }
+
+    extern std::vector<float> zbuffer; // zbuffer that we wrote from furgl.cpp
+    std::vector<float> shadow_buffer = zbuffer;
+
+    // Second Pass (from camera's perspective)
     lookat(eye, center, up);
     init_perspective((eye - center).norm());
     init_viewport(width / 16, height / 16, width * 7 / 8, height * 7 / 8);
     init_zbuffer(width, height);
 
     TGAImage framebuffer(width, height, TGAImage::RGB);
+    TGAImage shadow_frame(width, height, TGAImage::RGB);
+
     TGAImage normal_map;
     normal_map.read_tga_file("models/diablo3_pose_nm_tangent.tga");
     normal_map.flip_vertically(); // Aligns the image Y-axis with texture V-coordinates
@@ -161,8 +233,7 @@ int main(int argc, char **argv) {
     specular_map.read_tga_file("models/diablo3_pose_spec.tga");
     specular_map.flip_vertically(); // Aligns the image Y-axis with texture V-coordinates
 
-    Furmodel model("models/diablo3_pose.obj");
-    PhongShader shader(model, normal_map, diffuse_map, specular_map);
+    PhongShader shader(model, normal_map, diffuse_map, specular_map, shadow_buffer, LightMatrix, width, height, shadow_frame);
 
     for (int i = 0; i < model.nfaces(); i++) {
         Triangle screen_coords;
@@ -185,5 +256,6 @@ int main(int argc, char **argv) {
     }
 
     framebuffer.write_tga_file("framebuffer.tga");
+    shadow_frame.write_tga_file("shadow_mask.tga");
     return 0;
 }
