@@ -170,56 +170,6 @@ struct PhongShader : public IShader {
     }
 };
 
-struct WorldPositionShader : public IShader {
-    const Furmodel &model;
-    std::vector<Furvec3> &world_positions;
-    std::vector<bool> &has_surface;
-    int width, height;
-
-    Furvec3 varying_vert[3]; // 3D model vertices of the triangle
-    Furvec3 varying_scr[3];  // Screen coordinates of the triangle
-
-    WorldPositionShader(const Furmodel &m, std::vector<Furvec3> &wp, std::vector<bool> &hs, int w, int h) : model(m), world_positions(wp), has_surface(hs), width(w), height(h) {}
-
-    Furvec4 vertex(int iface, int nthvert) override {
-        int v_idx = model.face(iface)[nthvert];
-        Furvec3 v = model.vert(v_idx);
-        varying_vert[nthvert] = v;
-
-        Furvec3 eye_coords = multiply_with_w(ModelView, v);
-        float w = eye_coords.z * Perspective.data[3][2] + Perspective.data[3][3];
-
-        Furvec3 p = multiply_with_w(Perspective, eye_coords);
-
-        varying_scr[nthvert] = multiply_with_w(ViewPort, p);
-
-        return {p.x, p.y, p.z, w};
-    }
-    std::pair<bool, TGAColor> fragment(Furvec3 bar) override {
-        Furvec3 p_world = varying_vert[0] * bar.x + varying_vert[1] * bar.y + varying_vert[2] * bar.z; // current triangle's 3D position
-        Furvec3 scr = varying_scr[0] * bar.x + varying_scr[1] * bar.y + varying_scr[2] * bar.z;
-
-        // int casting with avoiding out of bounds memory
-        int sx = std::clamp((int)(scr.x + 0.5f), 0, width - 1);
-        int sy = std::clamp((int)(scr.y + 0.5f), 0, height - 1);
-
-        world_positions[sx + sy * width] = p_world;
-        has_surface[sx + sy * width] = true;
-        return {false, TGAColor{}};
-    }
-};
-
-Furvec3 sample_point_on_sphere(float radius = 2.5f) {
-    constexpr double pi = 3.14159265358979323846;
-    float z = static_cast <float> (rand()) / static_cast <float> (RAND_MAX);
-    float phi = static_cast <float> (rand()) / (static_cast <float> (RAND_MAX/(2 * pi)));
-    float r = sqrt(1 - z * z);
-    float x = r * cos(phi);
-    float y = r * sin(phi);
-
-    return Furvec3(x, y, z) * radius;
-}
-
 int main(int argc, char **argv) {
     const int width = 800;
     const int height = 800;
@@ -230,24 +180,25 @@ int main(int argc, char **argv) {
 
     Furmodel model("models/diablo3_pose.obj");
 
-    // Pass 1: Render from main camera view using WorldPositionShader
-    lookat(eye, center, up);
-    init_perspective((eye - center).norm());
+    // First Pass for Shadow Mapping (from light's perspective)
+    Furvec3 light_dir(1, 5, 1);
+    lookat(light_dir, center, up);
+    init_perspective((light_dir - center).norm());
     init_viewport(width / 16, height / 16, width * 7 / 8, height * 7 / 8);
     init_zbuffer(width, height);
 
-    std::vector<Furvec3> world_positions(width * height);
-    std::vector<bool> has_surface(width * height, false);
+    Furmatrix LightMatrix = ViewPort * Perspective * ModelView; // projection matrix of light
 
-    WorldPositionShader main_shader(model, world_positions, has_surface, width, height);
-    TGAImage main_dump(width, height, TGAImage::RGB);
+    DepthShader depth_shader(model);
+    TGAImage depth_dump(width, height, TGAImage::RGB); // filler for rasterize function
 
     for (int i = 0; i < model.nfaces(); i++) {
         Triangle screen_coords;
         Furvec3 clip_z;
 
         for (int j = 0; j < 3; j++) {
-            Furvec4 clip_vert = main_shader.vertex(i, j);
+            Furvec4 clip_vert = depth_shader.vertex(i, j);
+
             screen_coords[j] = multiply_with_w(ViewPort, Furvec3(clip_vert.x, clip_vert.y, clip_vert.z));
 
             if (j == 0) clip_z.x = clip_vert.z;
@@ -255,85 +206,56 @@ int main(int argc, char **argv) {
             else clip_z.z = clip_vert.z;
         }
 
-        rasterize(screen_coords, &clip_z, main_shader, main_dump);
+        rasterize(screen_coords, &clip_z, depth_shader, depth_dump);
     }
 
-    // Pass 2: 1000 sample camera passes for brute-force AO
-    const int SAMPLES = 1000;
-    std::vector<float> visibility(width * height, 0.0f);
+    extern std::vector<float> zbuffer; // zbuffer that we wrote from furgl.cpp
+    std::vector<float> shadow_buffer = zbuffer;
 
-    DepthShader depth_shader(model);
-    TGAImage sample_dump(width, height, TGAImage::RGB);
+    // Second Pass (from camera's perspective)
+    lookat(eye, center, up);
+    init_perspective((eye - center).norm());
+    init_viewport(width / 16, height / 16, width * 7 / 8, height * 7 / 8);
+    init_zbuffer(width, height);
 
-    for (int s = 0; s < SAMPLES; s++) {
-        Furvec3 sample_eye = sample_point_on_sphere(2.5f); // random position for sampling camera
+    TGAImage framebuffer(width, height, TGAImage::RGB);
+    TGAImage shadow_frame(width, height, TGAImage::RGB);
 
-        // Rendering a depth map
-        lookat(sample_eye, center, up);
-        init_perspective((sample_eye - center).norm());
-        init_viewport(width / 16, height / 16, width * 7 / 8, height * 7 / 8);
-        init_zbuffer(width, height);
+    TGAImage normal_map;
+    normal_map.read_tga_file("models/diablo3_pose_nm_tangent.tga");
+    normal_map.flip_vertically(); // Aligns the image Y-axis with texture V-coordinates
 
-        Furmatrix SampleLightMatrix = ViewPort * Perspective * ModelView;
+    TGAImage diffuse_map;
+    diffuse_map.read_tga_file("models/diablo3_pose_diffuse.tga");
+    diffuse_map.flip_vertically(); // Aligns the image Y-axis with texture V-coordinates
 
-        for (int i = 0; i < model.nfaces(); i++) {
-            Triangle screen_coords;
-            Furvec3 clip_z;
+    TGAImage specular_map;
+    specular_map.read_tga_file("models/diablo3_pose_spec.tga");
+    specular_map.flip_vertically(); // Aligns the image Y-axis with texture V-coordinates
 
-            for (int j = 0; j < 3; j++) {
-                Furvec4 clip_vert = depth_shader.vertex(i, j);
-                screen_coords[j] = multiply_with_w(ViewPort, Furvec3(clip_vert.x, clip_vert.y, clip_vert.z));
+    PhongShader shader(model, normal_map, diffuse_map, specular_map, shadow_buffer, LightMatrix, width, height, shadow_frame);
 
-                if (j == 0) clip_z.x = clip_vert.z;
-                else if (j == 1) clip_z.y = clip_vert.z;
-                else clip_z.z = clip_vert.z;
-            }
+    for (int i = 0; i < model.nfaces(); i++) {
+        Triangle screen_coords;
+        Furvec3 clip_z;
 
-            rasterize(screen_coords, &clip_z, depth_shader, sample_dump);
+        for (int j = 0; j < 3; j++) {
+            Furvec4 clip_vert = shader.vertex(i, j);
+
+            screen_coords[j] = multiply_with_w(ViewPort, Furvec3(clip_vert.x, clip_vert.y, clip_vert.z));
+
+            if (j == 0) clip_z.x = clip_vert.z;
+            else if (j == 1) clip_z.y = clip_vert.z;
+            else clip_z.z = clip_vert.z;
         }
-        //#Rendering a depth map
 
-        extern std::vector<float> zbuffer;
-
-        for (int y = 0; y < height; y++) {
-            for (int x = 0; x < width; x++) {
-                int idx = x + y * width;
-                if (!has_surface[idx]) continue;
-
-                // Reprojecting main screen surface points into sample camera space
-                Furvec3 p_world = world_positions[idx];
-                Furvec3 p_light = multiply_with_w(SampleLightMatrix, p_world);
-
-                int lx = (int)p_light.x;
-                int ly = (int)p_light.y;
-
-                // AO calculation
-                if (lx >= 0 && lx < width && ly >= 0 && ly < height) {
-                    int l_idx = lx + ly * width;
-                    if (p_light.z >= zbuffer[l_idx] - 0.05f) {
-                        visibility[idx] += 1.0f;
-                    }
-                }
-            }
-        }
+        // shader.color = TGAColor{
+        //     (uint8_t) (std::rand() % 255), (uint8_t) (std::rand() % 255), (uint8_t) (std::rand() % 255), 255
+        // };
+        rasterize(screen_coords, &clip_z, shader, framebuffer);
     }
 
-    // Save ao.tga
-    TGAImage ao_image(width, height, TGAImage::RGB);
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            int idx = x + y * width;
-            if (!has_surface[idx]) {
-                ao_image.set(x, y, TGAColor{0, 0, 0, 255});
-                continue;
-            }
-
-            float factor = visibility[idx] / static_cast<float>(SAMPLES);
-            uint8_t val = static_cast<uint8_t>(std::clamp(factor * 255.0f, 0.0f, 255.0f));
-            ao_image.set(x, y, TGAColor{val, val, val, 255});
-        }
-    }
-
-    ao_image.write_tga_file("ao.tga");
+    framebuffer.write_tga_file("framebuffer.tga");
+    shadow_frame.write_tga_file("shadow_mask.tga");
     return 0;
 }
