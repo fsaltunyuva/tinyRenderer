@@ -170,6 +170,56 @@ struct PhongShader : public IShader {
     }
 };
 
+struct WorldPositionShader : public IShader {
+    const Furmodel &model;
+    std::vector<Furvec3> &world_positions;
+    std::vector<bool> &has_surface;
+    int width, height;
+
+    Furvec3 varying_vert[3]; // 3D model vertices of the triangle
+    Furvec3 varying_scr[3];  // Screen coordinates of the triangle
+
+    WorldPositionShader(const Furmodel &m, std::vector<Furvec3> &wp, std::vector<bool> &hs, int w, int h) : model(m), world_positions(wp), has_surface(hs), width(w), height(h) {}
+
+    Furvec4 vertex(int iface, int nthvert) override {
+        int v_idx = model.face(iface)[nthvert];
+        Furvec3 v = model.vert(v_idx);
+        varying_vert[nthvert] = v;
+
+        Furvec3 eye_coords = multiply_with_w(ModelView, v);
+        float w = eye_coords.z * Perspective.data[3][2] + Perspective.data[3][3];
+
+        Furvec3 p = multiply_with_w(Perspective, eye_coords);
+
+        varying_scr[nthvert] = multiply_with_w(ViewPort, p);
+
+        return {p.x, p.y, p.z, w};
+    }
+    std::pair<bool, TGAColor> fragment(Furvec3 bar) override {
+        Furvec3 p_world = varying_vert[0] * bar.x + varying_vert[1] * bar.y + varying_vert[2] * bar.z; // current triangle's 3D position
+        Furvec3 scr = varying_scr[0] * bar.x + varying_scr[1] * bar.y + varying_scr[2] * bar.z;
+
+        // int casting with avoiding out of bounds memory
+        int sx = std::clamp((int)(scr.x + 0.5f), 0, width - 1);
+        int sy = std::clamp((int)(scr.y + 0.5f), 0, height - 1);
+
+        world_positions[sx + sy * width] = p_world;
+        has_surface[sx + sy * width] = true;
+        return {false, TGAColor{}};
+    }
+};
+
+Furvec3 sample_point_on_sphere(float radius = 2.5f) {
+    constexpr double pi = 3.14159265358979323846;
+    float z = static_cast <float> (rand()) / static_cast <float> (RAND_MAX);
+    float phi = static_cast <float> (rand()) / (static_cast <float> (RAND_MAX/(2 * pi)));
+    float r = sqrt(1 - z * z);
+    float x = r * cos(phi);
+    float y = r * sin(phi);
+
+    return Furvec3(x, y, z) * radius;
+}
+
 int main(int argc, char **argv) {
     const int width = 800;
     const int height = 800;
