@@ -129,14 +129,6 @@ struct PhongShader : public IShader {
             }
         }
 
-        // // With Diffuse and Specular maps
-        // TGAColor color{
-        //     static_cast<std::uint8_t>(std::min(255, diffuse_color.bgra[0] + specular_color.bgra[0])),
-        //     static_cast<std::uint8_t>(std::min(255, diffuse_color.bgra[1] + specular_color.bgra[1])),
-        //     static_cast<std::uint8_t>(std::min(255, diffuse_color.bgra[2] + specular_color.bgra[2])),
-        //     255
-        // };
-
         // With shading
         TGAColor color;
         for (int i = 0; i < 3; i++) {
@@ -145,10 +137,6 @@ struct PhongShader : public IShader {
         }
 
         color.bgra[3] = 255;
-        // for (int i=0; i<3; i++) {
-        //     float intensity = 0.1f + 0.6f * (color.bgra[i] / 255.f) + 0.7f * specular;
-        //     color.bgra[i] = static_cast<std::uint8_t>(std::min(255.f, 255.f * intensity));
-        // }
 
         // Shadow Mask Drawing
         Furvec3 cam_coords = multiply_with_w(ModelView, p_model);
@@ -165,6 +153,58 @@ struct PhongShader : public IShader {
         int sx = std::clamp((int)scr.x, 0, width - 1);
         int sy = std::clamp((int)scr.y, 0, height - 1);
         shadow_frame.set(sx, sy, mask_color);
+
+        return {false, color};
+    }
+};
+
+struct ToonShader : public IShader {
+    const Furmodel &model;
+    const TGAImage &diffuse_map;
+
+    Furvec3 varying_nrm[3];
+    Furvec3 light_dir = normalized(Furvec3(1, 1, 3)); // bright forward-facing light
+    Furvec3 varying_uv[3];
+
+    ToonShader(const Furmodel &m, const TGAImage &diff) : model(m), diffuse_map(diff) {}
+
+    Furvec4 vertex(int iface, int nthvert) override {
+        int v_idx = model.face(iface)[nthvert];
+        varying_nrm[nthvert] = model.normal(iface, nthvert);
+        varying_uv[nthvert] = model.uv(iface, nthvert);
+
+        Furvec3 v = model.vert(v_idx);
+        Furvec3 eye_coords = multiply_with_w(ModelView, v);
+        float w = eye_coords.z * Perspective.data[3][2] + Perspective.data[3][3];
+
+        Furvec3 p = multiply_with_w(Perspective, eye_coords);
+        return {p.x, p.y, p.z, w};
+    }
+
+    std::pair<bool, TGAColor> fragment(Furvec3 bar) override {
+        Furvec3 n = normalized(varying_nrm[0] * bar.x + varying_nrm[1] * bar.y + varying_nrm[2] * bar.z);
+        Furvec3 uv = varying_uv[0] * bar.x + varying_uv[1] * bar.y + varying_uv[2] * bar.z;
+
+        int tex_x = std::min(diffuse_map.width() - 1, std::max(0, (int)(uv.x * diffuse_map.width())));
+        int tex_y = std::min(diffuse_map.height() - 1, std::max(0, (int)(uv.y * diffuse_map.height())));
+
+        TGAColor diffuse_color = diffuse_map.get(tex_x, tex_y);
+
+        float raw_light = std::max(0.0f, n * light_dir);
+
+        // Quantize light intensities
+        float toon_intensity;
+        if (raw_light > 0.8f) toon_intensity = 1.0f;
+        else if (raw_light > 0.5f) toon_intensity = 0.75f;
+        else if (raw_light > 0.25f) toon_intensity = 0.50f;
+        else toon_intensity = 0.30f; // Ambient floor
+
+        TGAColor color;
+        for (int i = 0; i < 3; i++) {
+            float channel = diffuse_color.bgra[i] * toon_intensity;
+            color.bgra[i] = static_cast<std::uint8_t>(std::min(255.f, channel));
+        }
+        color.bgra[3] = 255;
 
         return {false, color};
     }
@@ -259,80 +299,9 @@ int main(int argc, char **argv) {
     }
 
     extern std::vector<float> zbuffer;
-    std::vector<float> main_zbuffer = zbuffer; // Save main view Z-buffer for SSAO
+    std::vector<float> main_zbuffer = zbuffer; // Save main view Z-buffer for SSAO and Sobel filter
 
-    // Pass 2: Brute Force AO (1000 sample camera passes)
-    const int SAMPLES = 1000;
-    std::vector<float> visibility(width * height, 0.0f);
-
-    DepthShader depth_shader(model);
-    TGAImage sample_dump(width, height, TGAImage::RGB);
-
-    for (int s = 0; s < SAMPLES; s++) {
-        Furvec3 sample_eye = sample_point_on_sphere(2.5f); // random position for sampling camera
-
-        lookat(sample_eye, center, up);
-        init_perspective((sample_eye - center).norm());
-        init_viewport(width / 16, height / 16, width * 7 / 8, height * 7 / 8);
-        init_zbuffer(width, height);
-
-        Furmatrix SampleLightMatrix = ViewPort * Perspective * ModelView;
-
-        for (int i = 0; i < model.nfaces(); i++) {
-            Triangle screen_coords;
-            Furvec3 clip_z;
-
-            for (int j = 0; j < 3; j++) {
-                Furvec4 clip_vert = depth_shader.vertex(i, j);
-                screen_coords[j] = multiply_with_w(ViewPort, Furvec3(clip_vert.x, clip_vert.y, clip_vert.z));
-
-                if (j == 0) clip_z.x = clip_vert.z;
-                else if (j == 1) clip_z.y = clip_vert.z;
-                else clip_z.z = clip_vert.z;
-            }
-
-            rasterize(screen_coords, &clip_z, depth_shader, sample_dump);
-        }
-
-        for (int y = 0; y < height; y++) {
-            for (int x = 0; x < width; x++) {
-                int idx = x + y * width;
-                if (!has_surface[idx]) continue;
-
-                Furvec3 p_world = world_positions[idx];
-                Furvec3 p_light = multiply_with_w(SampleLightMatrix, p_world);
-
-                int lx = (int)p_light.x;
-                int ly = (int)p_light.y;
-
-                if (lx >= 0 && lx < width && ly >= 0 && ly < height) {
-                    int l_idx = lx + ly * width;
-                    if (p_light.z >= zbuffer[l_idx] - 0.05f) {
-                        visibility[idx] += 1.0f;
-                    }
-                }
-            }
-        }
-    }
-
-    // Save brute-force ao.tga
-    TGAImage ao_image(width, height, TGAImage::RGB);
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            int idx = x + y * width;
-            if (!has_surface[idx]) {
-                ao_image.set(x, y, TGAColor{0, 0, 0, 255});
-                continue;
-            }
-
-            float factor = visibility[idx] / static_cast<float>(SAMPLES);
-            uint8_t val = static_cast<uint8_t>(std::clamp(factor * 255.0f, 0.0f, 255.0f));
-            ao_image.set(x, y, TGAColor{val, val, val, 255});
-        }
-    }
-    ao_image.write_tga_file("ao.tga");
-
-    // Pass 3: Screen-Space Ambient Occlusion (SSAO)
+    // Pass 2: Screen-Space Ambient Occlusion (SSAO)
     lookat(eye, center, up);
     init_perspective((eye - center).norm());
     init_viewport(width / 16, height / 16, width * 7 / 8, height * 7 / 8);
@@ -380,7 +349,74 @@ int main(int argc, char **argv) {
             ssao_image.set(x, y, TGAColor{val, val, val, 255});
         }
     }
-
     ssao_image.write_tga_file("ssao.tga");
+
+    // Pass 3: Toon Shader Pass
+    lookat(eye, center, up);
+    init_perspective((eye - center).norm());
+    init_viewport(width / 16, height / 16, width * 7 / 8, height * 7 / 8);
+    init_zbuffer(width, height);
+
+    TGAImage diffuse_map;
+    diffuse_map.read_tga_file("models/diablo3_pose_diffuse.tga");
+    diffuse_map.flip_vertically();
+
+    TGAImage toon_frame(width, height, TGAImage::RGB);
+    ToonShader toon_shader(model, diffuse_map);
+
+    for (int i = 0; i < model.nfaces(); i++) {
+        Triangle screen_coords;
+        Furvec3 clip_z;
+
+        for (int j = 0; j < 3; j++) {
+            Furvec4 clip_vert = toon_shader.vertex(i, j);
+            screen_coords[j] = multiply_with_w(ViewPort, Furvec3(clip_vert.x, clip_vert.y, clip_vert.z));
+
+            if (j == 0) clip_z.x = clip_vert.z;
+            else if (j == 1) clip_z.y = clip_vert.z;
+            else clip_z.z = clip_vert.z;
+        }
+
+        rasterize(screen_coords, &clip_z, toon_shader, toon_frame);
+    }
+
+    // Pass 4: Sobel Filter on main_zbuffer to draw outlines
+    for (int y = 1; y < height - 1; y++) {
+        for (int x = 1; x < width - 1; x++) {
+            int idx = x + y * width;
+            if (!has_surface[idx]) continue;
+
+            // 3x3 Z-buffer neighborhood
+            float z00 = main_zbuffer[(x - 1) + (y - 1) * width];
+            float z01 = main_zbuffer[(x) + (y - 1) * width];
+            float z02 = main_zbuffer[(x + 1) + (y - 1) * width];
+
+            float z10 = main_zbuffer[(x - 1) + (y) * width];
+            float z12 = main_zbuffer[(x + 1) + (y) * width];
+
+            float z20 = main_zbuffer[(x - 1) + (y + 1) * width];
+            float z21 = main_zbuffer[(x) + (y + 1) * width];
+            float z22 = main_zbuffer[(x + 1) + (y + 1) * width];
+
+            // Sobel K_x kernel
+            float Gx = (-1.f * z00 + 1.f * z02) +
+                       (-2.f * z10 + 2.f * z12) +
+                       (-1.f * z20 + 1.f * z22);
+
+            // Sobel K_y kernel
+            float Gy = (-1.f * z00 - 2.f * z01 - 1.f * z02) +
+                       ( 1.f * z20 + 2.f * z21 + 1.f * z22);
+
+            float gradient = std::sqrt(Gx * Gx + Gy * Gy);
+
+            // Threshold for depth jump edge
+            if (gradient > 0.1f) {
+                toon_frame.set(x, y, TGAColor{255, 255, 255, 255}); // Black outline
+            }
+        }
+    }
+
+    toon_frame.write_tga_file("toon.tga");
+    std::cout << "Rendered toon shading with Sobel depth outlines to toon.tga!\n";
     return 0;
 }
